@@ -46,11 +46,11 @@ flowchart TD
 
     User((User)):::user
 
-    subgraph Frontend ["Client Workspace (Angular 17)"]
+    subgraph Frontend ["Client Workspace (Angular 17+)"]
         UI["Real-Time Dashboard"]:::frontend
     end
 
-    subgraph Backend ["Server Workspace (Java 21 / Spring Boot 4)"]
+    subgraph Backend ["Server Workspace (Java 21 / Spring Boot 4.1)"]  
         API["Ingestion REST API\n(POST /api/jobs → 202)"]:::backend
         Worker["Async Worker\n(RabbitMQ Consumer)"]:::backend
         WS["WebSocket Service\n(STOMP over SockJS)"]:::backend
@@ -93,44 +93,56 @@ flowchart TD
 
 ## 📁 Project Structure
 
+The backend follows a **package-by-feature hexagonal** layout. Each feature is its own self-contained hexagon — domain, application logic, and infrastructure adapters all live inside the feature package. This keeps features independently evolvable and prevents cross-feature coupling.
+
 ```
-java-spring-rabbitmq-broker/          ← Monorepo root
+java-spring-rabbitmq-broker/               ← Monorepo root
 ├── readme.md
-├── client/                           ← Angular 17 frontend
+├── client/                                ← Angular 17+ frontend
 │   └── src/
 │       ├── app/
-│       │   ├── core/                 # Singleton services, guards, interceptors
-│       │   ├── shared/               # Reusable standalone components
+│       │   ├── core/                      # Singleton services, guards, interceptors
+│       │   ├── shared/                    # Reusable standalone components
 │       │   └── features/
-│       │       ├── dashboard/        # Real-time job dashboard
-│       │       └── ingestion/        # Upload UI
+│       │       ├── dashboard/             # Real-time job dashboard
+│       │       └── ingestion/             # Upload UI
 │       └── environments/
-└── server/                           ← Spring Boot backend
+└── server/                                ← Spring Boot backend
     ├── pom.xml
     └── src/
         └── main/
             ├── java/com/example/cx_broker/
-            │   ├── CxBrokerApplication.java    ← Entry point
+            │   ├── CxBrokerApplication.java          ← Entry point
             │   │
-            │   ├── domain/                     ← Pure business logic (no Spring)
-            │   │   ├── model/                  # Job, Ticket, JobStatus
-            │   │   └── ports/
-            │   │       ├── in/                 # Use-case interfaces (driving ports)
-            │   │       └── out/                # Repository/broker interfaces (driven ports)
-            │   │
-            │   ├── application/                ← Use-case implementations
-            │   │   └── service/
-            │   │       ├── JobIngestionService.java
-            │   │       └── JobProcessingService.java
-            │   │
-            │   └── infrastructure/             ← Framework adapters
-            │       ├── web/                    # REST controllers
-            │       ├── messaging/              # RabbitMQ publisher & consumer
-            │       ├── persistence/            # JPA repositories & entities
-            │       └── websocket/              # WebSocket config & broadcaster
+            │   └── ticket_ingestion/                 ← Feature: Ticket Ingestion
+            │       │
+            │       ├── domain/                       ← Pure Java. Zero framework imports.
+            │       │   ├── model/
+            │       │   │   ├── TicketBatch.java       # Aggregate root
+            │       │   │   ├── SupportTicket.java     # Entity
+            │       │   │   └── BatchStatus.java       # Enum: PENDING → PROCESSING → COMPLETED | FAILED
+            │       │   └── ports/
+            │       │       ├── in/                   # Driving ports (use-case interfaces)
+            │       │       │   └── IngestBatchUseCase.java
+            │       │       └── out/                  # Driven ports (infrastructure contracts)
+            │       │           ├── BatchRepositoryPort.java
+            │       │           └── MessagePublisherPort.java
+            │       │
+            │       ├── application/                  ← Use-case implementations (orchestrators)
+            │       │   └── service/
+            │       │       ├── BatchIngestionService.java   # Implements IngestBatchUseCase
+            │       │       └── BatchProcessingService.java  # Async consumer handler
+            │       │
+            │       └── infrastructure/               ← Spring Boot adapters
+            │           ├── web/                      # REST controller (POST /api/jobs)
+            │           ├── messaging/                # RabbitMQ publisher & @RabbitListener
+            │           ├── persistence/              # JPA entities & Spring Data repositories
+            │           └── websocket/                # STOMP config & progress broadcaster
             └── resources/
                 └── application.properties
 ```
+
+> **Architecture Rule:** The `ticket_ingestion/domain/` package must **never** import anything from `org.springframework`, `jakarta.persistence`, or `com.rabbitmq`. It is pure Java — testable without any container.
 
 ---
 
@@ -140,22 +152,15 @@ java-spring-rabbitmq-broker/          ← Monorepo root
 
 - **Java 21** — [Adoptium](https://adoptium.net/)
 - **Maven 3.9+** — bundled via `./mvnw`
-- **Docker & Docker Compose** — for PostgreSQL and RabbitMQ
 - **Node.js 20+** — for the Angular client
+- **Docker & Docker Compose** *(deferred — see roadmap Phase 7)* — for PostgreSQL and RabbitMQ
 
-### 1. Start Infrastructure
+> ⏳ **Infrastructure Setup Deferred**
+> Docker Compose (PostgreSQL + RabbitMQ) is planned but not required for the current development phase. The domain model and application layer can be built and unit-tested without any running infrastructure. See [Phase 7 in the roadmap](#️-development-roadmap).
 
-```bash
-# From the project root
-docker compose up -d
-```
+### 1. Run the Backend
 
-| Service | URL | Credentials |
-| :--- | :--- | :--- |
-| PostgreSQL | `localhost:5432` | `admin` / `admin` |
-| RabbitMQ Management UI | `http://localhost:15672` | `admin` / `adminpassword` |
-
-### 2. Run the Backend
+Once infrastructure is available:
 
 ```bash
 cd server
@@ -164,7 +169,7 @@ cd server
 
 API available at: `http://localhost:8080`
 
-### 3. Run the Frontend
+### 2. Run the Frontend
 
 ```bash
 cd client
@@ -294,29 +299,34 @@ The frontend connects using **STOMP over SockJS**.
 
 ## 🔷 Hexagonal Architecture
 
-The server applies the **Ports & Adapters** pattern. The `domain/` package contains zero Spring, JPA, or AMQP annotations — it is pure Java.
+This project uses a **package-by-feature hexagonal** approach. Rather than a single global `domain/` package, each feature (`ticket_ingestion`, etc.) owns its own hexagon. This prevents features from coupling to each other through a shared domain layer.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                     Infrastructure                        │
-│  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐  │
-│  │REST API  │   │RabbitMQ      │   │JPA Repositories  │  │
-│  │(Driving) │   │Consumer/Pub. │   │(Driven Adapter)  │  │
-│  └────┬─────┘   └──────┬───────┘   └───────┬──────────┘  │
-│       │                │                   │             │
-│  ─────┼────────────────┼───────────────────┼──────────── │
-│       │           Port (Interface)          │             │
-│  ─────┼────────────────┼───────────────────┼──────────── │
-│       │                │                   │             │
-│  ┌────▼────────────────▼───────────────────▼──────────┐  │
-│  │                     Domain                          │  │
-│  │   Job  |  Ticket  |  JobIngestionService            │  │
-│  │        (Pure Java — zero framework imports)         │  │
-│  └─────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+  ticket_ingestion/  (one hexagon per feature)
+  ┌───────────────────────────────────────────────────────────┐
+  │                     infrastructure/                        │
+  │  ┌─────────────┐  ┌──────────────────┐  ┌─────────────┐  │
+  │  │ web/        │  │ messaging/        │  │ persistence/│  │
+  │  │ REST Controller  RabbitMQ Pub+Con  │  │ JPA Adapter │  │
+  │  │ (Driving    │  │ (Driving +        │  │ (Driven     │  │
+  │  │  Adapter)   │  │  Driven Adapter)  │  │  Adapter)   │  │
+  │  └──────┬──────┘  └────────┬──────────┘  └──────┬──────┘  │
+  │         │                  │                    │          │
+  │  ───────┼──────────────────┼────────────────────┼───────── │
+  │         │        domain/ports/ (Interfaces)      │          │
+  │  ───────┼──────────────────┼────────────────────┼───────── │
+  │         │                  │                    │          │
+  │  ┌──────▼──────────────────▼────────────────────▼──────┐  │
+  │  │                    domain/                            │  │
+  │  │  TicketBatch | SupportTicket | BatchStatus            │  │
+  │  │       (Pure Java — zero framework imports)            │  │
+  │  └───────────────────────────────────────────────────────┘  │
+  └───────────────────────────────────────────────────────────┘
+        ▲  Orchestrated by application/service/
+           BatchIngestionService, BatchProcessingService
 ```
 
-> **Rule:** The `domain/` package must **never** import anything from `org.springframework`, `javax.persistence`, or `com.rabbitmq`.
+> **Rule:** `ticket_ingestion/domain/` must **never** import anything from `org.springframework`, `jakarta.persistence`, or `com.rabbitmq`. It is pure Java, fully testable without a Spring container.
 
 ---
 
@@ -355,14 +365,15 @@ Step-by-step trace of a single batch upload:
 
 ## 🗺️ Development Roadmap
 
-- [ ] **Phase 1 — Domain Model**: `Job`, `Ticket`, `JobStatus` + port interfaces
-- [ ] **Phase 2 — Persistence Adapter**: JPA entities, PostgreSQL JSONB column for raw payload
-- [ ] **Phase 3 — Ingestion API**: `POST /api/jobs` controller + `JobIngestionService`
-- [ ] **Phase 4 — RabbitMQ Integration**: Publisher adapter + `@RabbitListener` consumer
-- [ ] **Phase 5 — WebSocket**: STOMP config + progress broadcaster
-- [ ] **Phase 6 — Angular Dashboard**: Upload form, real-time progress chart, job list
-- [ ] **Phase 7 — Docker Compose**: Full local environment with a single `docker compose up`
-- [ ] **Phase 8 — Tests**: Domain unit tests + adapter integration tests
+- [ ] **Phase 1 — Domain Model**: `TicketBatch`, `SupportTicket`, `BatchStatus` + port interfaces (`IngestBatchUseCase`, `BatchRepositoryPort`, `MessagePublisherPort`)
+- [ ] **Phase 2 — Application Layer**: `BatchIngestionService` + `BatchProcessingService` use-case implementations
+- [ ] **Phase 3 — Persistence Adapter**: JPA entities, Spring Data repositories, PostgreSQL JSONB column for raw payload
+- [ ] **Phase 4 — Ingestion API**: `POST /api/jobs` REST controller wired to the ingestion use case
+- [ ] **Phase 5 — RabbitMQ Integration**: Publisher adapter + `@RabbitListener` consumer + Dead Letter Queue (DLQ) config
+- [ ] **Phase 6 — WebSocket**: STOMP config + live progress broadcaster
+- [ ] **Phase 7 — Angular Dashboard**: Upload form, real-time progress chart, job list
+- [ ] **Phase 8 — Docker Compose** *(deferred)*: Full local environment — PostgreSQL + RabbitMQ with a single `docker compose up`. Skipped for now; will be added once local Docker is available.
+- [ ] **Phase 9 — Tests**: Domain unit tests (no container) + adapter integration tests (Testcontainers)
 
 ---
 
