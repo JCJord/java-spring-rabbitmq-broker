@@ -176,36 +176,6 @@ Dashboard available at: `http://localhost:4200`
 
 ---
 
-## ⚙️ Configuration
-
-All backend configuration lives in [`server/src/main/resources/application.properties`](server/src/main/resources/application.properties).
-
-```properties
-# Server
-server.port=8080
-
-# PostgreSQL
-spring.datasource.url=jdbc:postgresql://localhost:5432/cx_broker_db
-spring.datasource.username=admin
-spring.datasource.password=admin
-spring.datasource.driver-class-name=org.postgresql.Driver
-
-# Hibernate — auto-creates/updates tables from JPA entities
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
-spring.jpa.properties.hibernate.format_sql=true
-
-# RabbitMQ
-spring.rabbitmq.host=localhost
-spring.rabbitmq.port=5672
-spring.rabbitmq.username=admin
-spring.rabbitmq.password=adminpassword
-```
-
-> ⚠️ **Security:** Move credentials to environment variables or a secrets manager before any production deployment.
-
----
-
 ## 📡 API Reference
 
 ### `POST /api/jobs`
